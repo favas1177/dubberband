@@ -165,28 +165,36 @@ export async function POST(request: Request) {
       }
 
       const videoBuffer = await videoRes.arrayBuffer();
-      const contentType = videoRes.headers.get("content-type") || "video/mp4";
+      const sizeMB = (videoBuffer.byteLength / 1024 / 1024).toFixed(2);
+      console.log(`Downloaded ${sizeMB} MB. Uploading to Sarvam...`);
+      console.log("upload_url:", upload_url.substring(0, 120));
 
-      console.log(
-        `Uploading ${(videoBuffer.byteLength / 1024 / 1024).toFixed(1)} MB to Sarvam...`
-      );
+      // Do NOT set Content-Type — Azure SAS URLs reject requests
+      // whose Content-Type doesn't match the signature. Omitting it
+      // makes Azure use its default (application/octet-stream) which
+      // always passes signature validation.
       const uploadRes = await fetch(upload_url, {
         method: "PUT",
         headers: {
-          "Content-Type": contentType,
           "x-ms-blob-type": "BlockBlob",
         },
         body: videoBuffer,
       });
 
       if (!uploadRes.ok) {
-        const uploadErr = await uploadRes.text().catch(() => "");
+        // Log the full Azure XML error for debugging
+        const azureErr = await uploadRes.text().catch(() => "(no body)");
+        console.error(
+          `Azure upload failed ${uploadRes.status}:`,
+          azureErr.substring(0, 500)
+        );
         throw new Error(
-          `Failed to upload video to Sarvam storage (${uploadRes.status}): ${uploadErr}`
+          `Failed to upload video to Sarvam (Azure ${uploadRes.status}). ` +
+          `Detail: ${azureErr.substring(0, 200)}`
         );
       }
 
-      console.log("Upload to Sarvam complete. Returning project info (no upload_url).");
+      console.log("Upload complete. Returning project info.");
 
       // Return without upload_url — browser doesn't need to upload anything
       return NextResponse.json({
