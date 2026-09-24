@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import crypto from "crypto";
 
 // We use the service role key to bypass RLS since the webhook isn't authenticated as the user
 const supabase = createClient(
@@ -9,7 +10,23 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const rawBody = await request.text();
+    const signature = request.headers.get("signature") || "";
+    const webhookSecret = process.env.HEYGEN_WEBHOOK_SECRET;
+
+    if (webhookSecret) {
+      const expectedSignature = crypto
+        .createHmac("sha256", webhookSecret)
+        .update(rawBody)
+        .digest("hex");
+
+      if (signature !== expectedSignature) {
+        console.error("[HeyGen Webhook] Invalid signature");
+        return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+      }
+    }
+
+    const body = JSON.parse(rawBody);
     console.log("[HeyGen Webhook] Received payload:", body);
 
     // According to HeyGen's webhook docs, the job_id is usually provided in the payload
