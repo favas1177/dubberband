@@ -23,6 +23,24 @@ function toSarvamCode(code: string): string {
   return SARVAM_LANG_MAP[code] || code;
 }
 
+const HEYGEN_LANG_MAP: Record<string, string> = {
+  "hi": "Hindi", "hi-IN": "Hindi",
+  "ta-IN": "Tamil", "ta": "Tamil",
+  "te": "Telugu", "te-IN": "Telugu",
+  "ml-IN": "Malayalam", "ml": "Malayalam",
+  "bn": "Bengali", "bn-IN": "Bengali",
+  "mr": "Marathi", "mr-IN": "Marathi",
+  "gu": "Gujarati", "gu-IN": "Gujarati",
+  "kn": "Kannada", "kn-IN": "Kannada",
+  "pa": "Punjabi", "pa-IN": "Punjabi",
+  "en": "English", "en-IN": "English",
+  "auto": "English"
+};
+
+function toHeygenCode(code: string): string {
+  return HEYGEN_LANG_MAP[code] || "English";
+}
+
 export async function POST(request: Request) {
   try {
     // Always accept JSON — the file is never sent here.
@@ -43,12 +61,14 @@ export async function POST(request: Request) {
       sourceLanguage = "en-IN",
       lipSyncEnabled = false,
       fileName,
+      engine = "desi",
     } = body as {
       videoUrl?: string;
       targetLanguage?: string;
       sourceLanguage?: string;
       lipSyncEnabled?: boolean;
       fileName?: string;
+      engine?: "desi" | "fora";
     };
 
     const sarvamKey = process.env.SARVAM_API_KEY;
@@ -81,6 +101,89 @@ export async function POST(request: Request) {
     const sarvamSrcLang = toSarvamCode(sourceLanguage);
     const sarvamTargetLang = toSarvamCode(targetLanguage);
 
+    // ── 2. Insert project record ──────────────────────────────────────────
+    const projectTitle =
+      fileName?.replace(/\.[^.]+$/, "") ||
+      (videoUrl
+        ? videoUrl.includes("youtu")
+          ? "YouTube Video"
+          : "Translated Video"
+        : "Translation Job");
+
+    const { data: project, error: insertError } = await supabase
+      .from("projects")
+      .insert({
+        user_id: user.id,
+        title: projectTitle,
+        source_language: sarvamSrcLang,
+        target_language: sarvamTargetLang,
+        status: "uploading",
+        video_url: videoUrl || `pending:${fileName || "file"}`,
+      })
+      .select()
+      .single();
+
+    if (insertError || !project) {
+      throw new Error("Failed to create project record.");
+    }
+
+    // Deduct credits
+    await supabase
+      .from("profiles")
+      .update({ credits: profile.credits - 2 })
+      .eq("id", user.id);
+
+    // ── 3. Engine Branching ──────────────────────────────────────────
+    if (engine === "fora") {
+      if (!videoUrl) {
+        throw new Error("Fora (HeyGen) engine requires a public Video URL for now. Local file upload is not yet supported for Fora.");
+      }
+      
+      const heygenKey = process.env.HEYGEN_API_KEY;
+      if (!heygenKey) throw new Error("Missing HEYGEN_API_KEY.");
+
+      const heygenTargetLang = toHeygenCode(targetLanguage);
+      
+      const heygenRes = await fetch("https://api.heygen.com/v3/video-translations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": heygenKey,
+        },
+        body: JSON.stringify({
+          video: {
+            type: "url",
+            url: videoUrl,
+          },
+          output_languages: [heygenTargetLang],
+          mode: "speed",
+          title: projectTitle
+        }),
+      });
+
+      if (!heygenRes.ok) {
+        const text = await heygenRes.text();
+        let msg = text;
+        try { msg = JSON.parse(text)?.error?.message || text; } catch { /* noop */ }
+        throw new Error(`HeyGen job creation failed (${heygenRes.status}): ${msg}`);
+      }
+
+      const heygenData = await heygenRes.json();
+      const job_id = heygenData.data?.video_translation_id;
+
+      if (!job_id) {
+        throw new Error(`HeyGen response missing job_id: ${JSON.stringify(heygenData)}`);
+      }
+
+      return NextResponse.json({
+        project_id: project.id,
+        job_id,
+        upload_url: null,
+        lip_sync: lipSyncEnabled,
+      });
+    }
+
+    // ── Sarvam Engine Flow ──────────────────────────────────────────
     // ── 1. Create Sarvam Dubbing Job ────────────────────────────────────────
     const sarvamRes = await fetch("https://api.sarvam.ai/dubbing/jobs", {
       method: "POST",
@@ -117,32 +220,6 @@ export async function POST(request: Request) {
       throw new Error(
         `Sarvam response missing job_id/upload_url: ${JSON.stringify(sarvamData)}`
       );
-    }
-
-    // ── 2. Insert project record ──────────────────────────────────────────
-    const projectTitle =
-      fileName?.replace(/\.[^.]+$/, "") ||
-      (videoUrl
-        ? videoUrl.includes("youtu")
-          ? "YouTube Video"
-          : "Translated Video"
-        : "Translation Job");
-
-    const { data: project, error: insertError } = await supabase
-      .from("projects")
-      .insert({
-        user_id: user.id,
-        title: projectTitle,
-        source_language: sarvamSrcLang,
-        target_language: sarvamTargetLang,
-        status: "uploading",
-        video_url: videoUrl || `pending:${fileName || "file"}`,
-      })
-      .select()
-      .single();
-
-    if (insertError || !project) {
-      throw new Error("Failed to create project record.");
     }
 
     // Deduct credits

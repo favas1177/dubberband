@@ -3,12 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
   try {
-    const { project_id, job_id, lip_sync, video_url } = await request.json();
-
-    const sarvamKey = process.env.SARVAM_API_KEY;
-    if (!sarvamKey) {
-      throw new Error("Missing SARVAM_API_KEY");
-    }
+    const { project_id, job_id, lip_sync, video_url, engine } = await request.json();
 
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -17,21 +12,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Start Sarvam Job
-    const startRes = await fetch(`https://api.sarvam.ai/dubbing/jobs/${job_id}/start`, {
-      method: "POST",
-      headers: {
-        "api-subscription-key": sarvamKey,
-      },
-    });
+    let newVideoUrl = video_url;
 
-    if (!startRes.ok) {
-      const errorData = await startRes.json().catch(() => null);
-      throw new Error(errorData?.message || "Failed to start Sarvam job");
+    if (engine === "fora") {
+      // HeyGen starts translation automatically, nothing to do here
+      // Encode job_id in URL for the cron job to poll
+      newVideoUrl = `${video_url}#heygen_job:${job_id}`;
+    } else {
+      // Start Sarvam Job
+      const sarvamKey = process.env.SARVAM_API_KEY;
+      if (!sarvamKey) throw new Error("Missing SARVAM_API_KEY");
+
+      const startRes = await fetch(`https://api.sarvam.ai/dubbing/jobs/${job_id}/start`, {
+        method: "POST",
+        headers: { "api-subscription-key": sarvamKey },
+      });
+
+      if (!startRes.ok) {
+        const errorData = await startRes.json().catch(() => null);
+        throw new Error(errorData?.message || "Failed to start Sarvam job");
+      }
+
+      // Embed job_id and lip_sync config into the video_url so the cron job knows what to do
+      newVideoUrl = `${video_url}#sarvam_job:${job_id}?lipsync=${lip_sync ? 'true' : 'false'}`;
     }
-
-    // Embed job_id and lip_sync config into the video_url so the cron job knows what to do
-    const newVideoUrl = `${video_url}#sarvam_job:${job_id}?lipsync=${lip_sync ? 'true' : 'false'}`;
 
     // Update project status to processing
     await supabase

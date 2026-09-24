@@ -196,9 +196,10 @@ export function TranslationModal({
   const [urlVerifying, setUrlVerifying] = useState(false);
   const [urlError, setUrlError] = useState("");
 
-  /* Language state */
+  /* Language & Engine state */
   const [sourceLang, setSourceLang] = useState("auto");
   const [targetLang, setTargetLang] = useState("");
+  const [engine, setEngine] = useState<"desi" | "fora">("desi");
 
   /* Advanced options */
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -321,6 +322,7 @@ export function TranslationModal({
           sourceLanguage: sourceLang,
           lipSyncEnabled: advanced.lipSyncEnabled,
           fileName: file?.name,
+          engine,
         }),
       });
 
@@ -362,6 +364,7 @@ export function TranslationModal({
           job_id,
           lip_sync,
           video_url: activeTab === "url" ? url.trim() : `file:${file?.name ?? "upload"}`,
+          engine,
         }),
       });
 
@@ -699,6 +702,31 @@ export function TranslationModal({
               <h3 className="text-sm font-semibold text-white">
                 Language Configuration
               </h3>
+            </div>
+
+            <div className="flex items-center bg-slate-800/80 p-1 rounded-xl border border-white/5 mb-6">
+              <button
+                onClick={() => setEngine("desi")}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200",
+                  engine === "desi"
+                    ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/20"
+                    : "text-slate-400 hover:text-white border border-transparent"
+                )}
+              >
+                Desi 
+              </button>
+              <button
+                onClick={() => setEngine("fora")}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200",
+                  engine === "fora"
+                    ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/20"
+                    : "text-slate-400 hover:text-white border border-transparent"
+                )}
+              >
+                Fora 
+              </button>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
