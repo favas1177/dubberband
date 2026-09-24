@@ -14,12 +14,14 @@ import {
   Download,
   Link as LinkIcon,
   Trash2,
+  Upload,
+  XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-export type ProjectStatus = "completed" | "processing" | "draft";
+export type ProjectStatus = "completed" | "processing" | "draft" | "uploading" | "failed";
 
 export interface Project {
   id: string;
@@ -36,7 +38,7 @@ export interface Project {
 }
 
 const statusConfig: Record<
-  ProjectStatus,
+  string,
   {
     label: string;
     variant: "completed" | "processing" | "draft";
@@ -62,6 +64,26 @@ const statusConfig: Record<
     icon: FileText,
     iconClass: "text-slate-400",
   },
+  // API-set statuses
+  uploading: {
+    label: "Uploading",
+    variant: "processing",
+    icon: Upload,
+    iconClass: "text-indigo-400 animate-pulse",
+  },
+  failed: {
+    label: "Failed",
+    variant: "draft",
+    icon: XCircle,
+    iconClass: "text-red-500",
+  },
+};
+
+const FALLBACK_STATUS = {
+  label: "Processing",
+  variant: "processing" as const,
+  icon: Loader2,
+  iconClass: "text-amber-500 animate-spin",
 };
 
 interface ProjectCardProps {
@@ -72,7 +94,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [localProgress, setLocalProgress] = useState(project.progress || 0);
-  const status = statusConfig[project.status];
+  const status = statusConfig[project.status] ?? FALLBACK_STATUS;
   const StatusIcon = status.icon;
 
   // Simulate progress bar animation for demo purposes
