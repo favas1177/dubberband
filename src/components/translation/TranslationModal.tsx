@@ -218,8 +218,10 @@ export function TranslationModal({
     }
   };
 
-  /* Derived — Disable actions for local file uploads in this demo; require a valid public URL */
-  const hasInput = activeTab === "url" && (urlVerified || isValidPublicUrl(url));
+  /* Derived — either a local file or a valid public URL is required */
+  const hasInput =
+    (activeTab === "upload" && !!file) ||
+    (activeTab === "url" && (urlVerified || isValidPublicUrl(url)));
   const isReady = hasInput && !!targetLang;
 
   /* Dropzone */
@@ -307,43 +309,63 @@ export function TranslationModal({
   const handleOneClickTranslate = async () => {
     setIsProcessing(true);
     try {
-      const response = await fetch("/api/translate/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          videoUrl: url.trim(),
-          transcript: [],
-          targetLanguage: targetLang,
-          lipSyncEnabled: advanced.lipSyncEnabled,
-        }),
-      });
-      if (!response.ok) {
-         const errorData = await response.json();
-         throw new Error(errorData.error || "Generation failed");
+      // Build the generate request — send JSON for URL, FormData for file upload
+      let generateRes: Response;
+
+      if (activeTab === "upload" && file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("targetLanguage", targetLang);
+        fd.append("sourceLanguage", sourceLang);
+        fd.append("lipSyncEnabled", String(advanced.lipSyncEnabled));
+        generateRes = await fetch("/api/translate/generate", {
+          method: "POST",
+          body: fd,
+        });
+      } else {
+        generateRes = await fetch("/api/translate/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            videoUrl: url.trim(),
+            transcript: [],
+            targetLanguage: targetLang,
+            sourceLanguage: sourceLang,
+            lipSyncEnabled: advanced.lipSyncEnabled,
+          }),
+        });
       }
-      const data = await response.json();
-      
+
+      if (!generateRes.ok) {
+        const errorData = await generateRes.json();
+        throw new Error(errorData.error || "Generation failed");
+      }
+      const data = await generateRes.json();
+
       const { project_id, job_id, upload_url, lip_sync } = data;
 
-      // 1. Download video to browser memory
-      const videoRes = await fetch(url.trim());
-      if (!videoRes.ok) throw new Error("Failed to download source video");
-      const videoBlob = await videoRes.blob();
+      // Upload the video directly to Sarvam's signed upload URL
+      let videoBlob: Blob;
+      if (activeTab === "upload" && file) {
+        videoBlob = file;
+      } else {
+        const videoRes = await fetch(url.trim());
+        if (!videoRes.ok) throw new Error("Failed to download source video");
+        videoBlob = await videoRes.blob();
+      }
 
-      // 2. Upload directly to Sarvam
       const uploadRes = await fetch(upload_url, {
         method: "PUT",
         headers: {
-          "Content-Type": "video/mp4", // Assuming mp4
-          "Content-Length": videoBlob.size.toString(),
-          "x-ms-blob-type": "BlockBlob"
+          "Content-Type": videoBlob.type || "video/mp4",
+          "x-ms-blob-type": "BlockBlob",
         },
         body: videoBlob,
       });
 
       if (!uploadRes.ok) throw new Error("Failed to upload video to Sarvam");
 
-      // 3. Start the job
+      // Start the Sarvam job
       const startRes = await fetch("/api/translate/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -351,14 +373,14 @@ export function TranslationModal({
           project_id,
           job_id,
           lip_sync,
-          video_url: url.trim()
+          video_url: activeTab === "url" ? url.trim() : `file:${file?.name}`,
         }),
       });
 
       if (!startRes.ok) throw new Error("Failed to start processing");
 
       const project = buildProject("processing");
-      project.videoUrl = url.trim();
+      if (activeTab === "url") project.videoUrl = url.trim();
       onProjectCreated(project);
       handleOpenChange(false);
       addToast("Video queued for translation", "success");
@@ -372,22 +394,37 @@ export function TranslationModal({
   const handleProofreadScript = async () => {
     setIsProcessing(true);
     try {
-      const response = await fetch("/api/translate/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          videoUrl: url.trim(),
-          sourceLanguage: sourceLang,
-        }),
-      });
+      let response: Response;
+
+      if (activeTab === "upload" && file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("sourceLanguage", sourceLang);
+        fd.append("targetLanguage", targetLang);
+        response = await fetch("/api/translate/transcribe", {
+          method: "POST",
+          body: fd,
+        });
+      } else {
+        response = await fetch("/api/translate/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            videoUrl: url.trim(),
+            sourceLanguage: sourceLang,
+            targetLanguage: targetLang,
+          }),
+        });
+      }
+
       if (!response.ok) {
-         const errorData = await response.json();
-         throw new Error(errorData.error || "Translation failed");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Transcription failed");
       }
       const data = await response.json();
-      
+
       const project = buildProject("draft");
-      project.videoUrl = url.trim();
+      if (activeTab === "url") project.videoUrl = url.trim();
       onProjectCreated(project);
       handleOpenChange(false);
       const qs = project.videoUrl ? `?videoUrl=${encodeURIComponent(project.videoUrl)}` : "";
@@ -567,11 +604,13 @@ export function TranslationModal({
                   </div>
                 )}
 
-                {/* Helper notice for demo */}
-                <div className="flex items-center gap-2.5 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-xs">
-                  <AlertCircle className="h-4 w-4 flex-shrink-0 text-amber-400" />
-                  <span>For this demo, please use a public URL instead of file upload.</span>
-                </div>
+                {/* Ready notice */}
+                {file && (
+                  <div className="flex items-center gap-2.5 p-3 bg-teal-500/10 border border-teal-500/20 rounded-xl text-teal-300 text-xs">
+                    <Check className="h-4 w-4 flex-shrink-0 text-teal-400" />
+                    <span>File ready — select a target language below to continue.</span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -859,10 +898,10 @@ export function TranslationModal({
 
             {!isReady && (
               <p className="text-center text-xs text-slate-500 mt-3">
-                {activeTab === "upload"
-                  ? "For this demo, please use a public URL instead of file upload."
-                  : !hasInput
-                  ? "Paste YouTube/Public URL to continue"
+                {!hasInput
+                  ? activeTab === "upload"
+                    ? "Upload a video file to continue"
+                    : "Paste a public URL to continue"
                   : "Select a target language to continue"}
               </p>
             )}
