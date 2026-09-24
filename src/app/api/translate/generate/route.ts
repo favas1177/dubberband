@@ -169,7 +169,7 @@ export async function POST(request: Request) {
       }
 
       const heygenData = await heygenRes.json();
-      const job_id = heygenData.data?.video_translation_id;
+      const job_id = heygenData.data?.video_translation_ids?.[0] || heygenData.data?.video_translation_id;
 
       if (!job_id) {
         throw new Error(`HeyGen response missing job_id: ${JSON.stringify(heygenData)}`);
