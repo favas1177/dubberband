@@ -5,6 +5,8 @@ import { ProjectCard, type Project } from "@/components/dashboard/ProjectCard";
 import { TopHeader } from "@/components/layout/TopHeader";
 import { TranslationModal } from "@/components/translation/TranslationModal";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
+import { createClient } from "@/lib/supabase/client";
 import { ArrowRight, TrendingUp, Video, Clock, CheckCircle, Plus } from "lucide-react";
 import Link from "next/link";
 
@@ -13,74 +15,91 @@ interface DashboardClientProps {
   initialProjects: Project[];
 }
 
-/* ─── Stats config (static, no server data needed) ──────────────────────── */
-const stats = [
-  {
-    id: "stat-total-videos",
-    label: "Total Videos",
-    value: "48",
-    change: "+12 this month",
-    icon: Video,
-    iconBg: "bg-indigo-50",
-    iconColor: "text-indigo-600",
-  },
-  {
-    id: "stat-hours-translated",
-    label: "Hours Translated",
-    value: "127h",
-    change: "+23h this month",
-    icon: Clock,
-    iconBg: "bg-teal-50",
-    iconColor: "text-teal-600",
-  },
-  {
-    id: "stat-completed",
-    label: "Completed",
-    value: "41",
-    change: "85% success rate",
-    icon: CheckCircle,
-    iconBg: "bg-green-50",
-    iconColor: "text-green-600",
-  },
-  {
-    id: "stat-trending",
-    label: "Avg. Turnaround",
-    value: "4.2m",
-    change: "2x faster this week",
-    icon: TrendingUp,
-    iconBg: "bg-purple-50",
-    iconColor: "text-purple-600",
-  },
-];
+// Stats will be computed dynamically inside the component
 
 /* ─── Component ─────────────────────────────────────────────────────────── */
 export function DashboardClient({ initialProjects }: DashboardClientProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [projects, setProjects] = useState<Project[]>(initialProjects);
+  const { addToast } = useToast();
+  const supabase = createClient();
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const processingIds = projects.filter(p => p.status === "processing").map(p => p.id);
+      if (processingIds.length === 0) return;
+
+      const { data, error } = await supabase
+        .from('projects')
+        .select('*')
+        .in('id', processingIds);
+      
+      if (!error && data) {
+        let changed = false;
+        setProjects(prev => {
+          const next = [...prev];
+          for (const serverProj of data) {
+            const index = next.findIndex(p => p.id === serverProj.id);
+            if (index !== -1) {
+              const currentStatus = next[index].status;
+              if (currentStatus === "processing" && serverProj.status === "completed") {
+                changed = true;
+                addToast(`Translation completed: ${serverProj.title}`, "success");
+              } else if (currentStatus === "processing" && serverProj.status === "failed") {
+                changed = true;
+                addToast(`Translation failed: ${serverProj.title}`, "error");
+              }
+              if (currentStatus !== serverProj.status) {
+                next[index] = {
+                  ...next[index],
+                  status: serverProj.status,
+                  videoUrl: serverProj.video_url,
+                  progress: serverProj.progress
+                };
+              }
+            }
+          }
+          return next;
+        });
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [projects, addToast, supabase]);
 
   const handleProjectCreated = (project: Project) => {
     setProjects((prev) => [project, ...prev]);
   };
 
-  // Simulate background job completion for the demo
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setProjects((prev) =>
-        prev.map((p) => {
-          if (p.status === "processing") {
-            const tempP = p as any;
-            if (!tempP._createdTs) {
-              tempP._createdTs = Date.now();
-            } else if (Date.now() - tempP._createdTs > 12000) {
-              return { ...p, status: "completed" };
-            }
-          }
-          return p;
-        })
-      );
-    }, 2000);
-    return () => clearInterval(timer);
-  }, []);
+  const stats = [
+    {
+      id: "stat-total-videos",
+      label: "Total Videos",
+      value: projects.length.toString(),
+      icon: Video,
+      iconBg: "bg-indigo-500/10",
+      iconColor: "text-indigo-400",
+    },
+    {
+      id: "stat-completed",
+      label: "Completed",
+      value: projects.filter(p => p.status === "completed").length.toString(),
+      icon: CheckCircle,
+      iconBg: "bg-teal-500/10",
+      iconColor: "text-teal-400",
+    },
+    {
+      id: "stat-processing",
+      label: "Processing",
+      value: projects.filter(p => p.status === "processing").length.toString(),
+      icon: Clock,
+      iconBg: "bg-amber-500/10",
+      iconColor: "text-amber-400",
+    },
+  ];
+
+  const handleDeleteProject = (id: string) => {
+    setProjects(prev => prev.filter(p => p.id !== id));
+  };
 
   return (
     <>
@@ -128,7 +147,7 @@ export function DashboardClient({ initialProjects }: DashboardClientProps) {
         </div>
 
         {/* Stats row */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
           {stats.map((stat) => {
             const Icon = stat.icon;
             return (
@@ -143,11 +162,9 @@ export function DashboardClient({ initialProjects }: DashboardClientProps) {
                   >
                     <Icon className={`h-4 w-4 ${stat.iconColor}`} />
                   </div>
-                  <TrendingUp className="h-3.5 w-3.5 text-teal-500" />
                 </div>
                 <p className="text-2xl font-bold text-slate-800 mb-0.5">{stat.value}</p>
                 <p className="text-xs text-slate-500 font-medium">{stat.label}</p>
-                <p className="text-[10px] text-teal-600 font-semibold mt-1">{stat.change}</p>
               </div>
             );
           })}
@@ -179,7 +196,7 @@ export function DashboardClient({ initialProjects }: DashboardClientProps) {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {projects.map((project) => (
-              <ProjectCard key={project.id} project={project} />
+              <ProjectCard key={project.id} project={project} onDelete={handleDeleteProject} />
             ))}
           </div>
         </section>

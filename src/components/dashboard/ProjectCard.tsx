@@ -88,9 +88,10 @@ const FALLBACK_STATUS = {
 
 interface ProjectCardProps {
   project: Project;
+  onDelete?: (id: string) => void;
 }
 
-export function ProjectCard({ project }: ProjectCardProps) {
+export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [localProgress, setLocalProgress] = useState(project.progress || 0);
@@ -120,18 +121,40 @@ export function ProjectCard({ project }: ProjectCardProps) {
   }, [project.status]);
 
   const handleCardClick = () => {
-    if (project.status === "completed" || project.status === "draft") {
+    if (project.status === "completed") {
+      if (project.videoUrl) {
+        window.open(project.videoUrl, "_blank");
+      }
+    } else if (project.status === "draft") {
       const qs = project.videoUrl ? `?videoUrl=${encodeURIComponent(project.videoUrl)}` : "";
       router.push(`/translate/${project.id}/proofread${qs}`);
     }
   };
 
-  const handleMenuAction = (e: React.MouseEvent, action: string) => {
+  const handleMenuAction = async (e: React.MouseEvent, action: string) => {
     e.stopPropagation();
     setDropdownOpen(false);
     if (action === "edit") {
       const qs = project.videoUrl ? `?videoUrl=${encodeURIComponent(project.videoUrl)}` : "";
       router.push(`/translate/${project.id}/proofread${qs}`);
+    } else if (action === "delete") {
+      if (confirm("Are you sure you want to delete this project?")) {
+        try {
+          const res = await fetch(`/api/translate/delete?id=${project.id}`, { method: "DELETE" });
+          if (res.ok && onDelete) {
+            onDelete(project.id);
+          }
+        } catch (e) {
+          console.error("Failed to delete", e);
+        }
+      }
+    } else if (action === "download") {
+      if (project.videoUrl) window.open(project.videoUrl, "_blank");
+    } else if (action === "share") {
+      if (project.videoUrl) {
+        navigator.clipboard.writeText(project.videoUrl);
+        alert("Link copied to clipboard!");
+      }
     }
   };
 
