@@ -309,61 +309,49 @@ export function TranslationModal({
   const handleOneClickTranslate = async () => {
     setIsProcessing(true);
     try {
-      // Build the generate request — send JSON for URL, FormData for file upload
-      let generateRes: Response;
-
-      if (activeTab === "upload" && file) {
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("targetLanguage", targetLang);
-        fd.append("sourceLanguage", sourceLang);
-        fd.append("lipSyncEnabled", String(advanced.lipSyncEnabled));
-        generateRes = await fetch("/api/translate/generate", {
-          method: "POST",
-          body: fd,
-        });
-      } else {
-        generateRes = await fetch("/api/translate/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            videoUrl: url.trim(),
-            transcript: [],
-            targetLanguage: targetLang,
-            sourceLanguage: sourceLang,
-            lipSyncEnabled: advanced.lipSyncEnabled,
-          }),
-        });
-      }
-
-      if (!generateRes.ok) {
-        const errorData = await generateRes.json();
-        throw new Error(errorData.error || "Generation failed");
-      }
-      const data = await generateRes.json();
-
-      const { project_id, job_id, upload_url, lip_sync } = data;
-
-      // Upload the video directly to Sarvam's signed upload URL
-      let videoBlob: Blob;
-      if (activeTab === "upload" && file) {
-        videoBlob = file;
-      } else {
-        const videoRes = await fetch(url.trim());
-        if (!videoRes.ok) throw new Error("Failed to download source video");
-        videoBlob = await videoRes.blob();
-      }
-
-      const uploadRes = await fetch(upload_url, {
-        method: "PUT",
-        headers: {
-          "Content-Type": videoBlob.type || "video/mp4",
-          "x-ms-blob-type": "BlockBlob",
-        },
-        body: videoBlob,
+      // Always send JSON to generate — never the raw file.
+      // For URL: server downloads + uploads to Sarvam (avoids browser CORS).
+      // For file: server returns an upload_url; browser then PUTs the file.
+      const generateRes = await fetch("/api/translate/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoUrl: activeTab === "url" ? url.trim() : undefined,
+          targetLanguage: targetLang,
+          sourceLanguage: sourceLang,
+          lipSyncEnabled: advanced.lipSyncEnabled,
+          fileName: file?.name,
+        }),
       });
 
-      if (!uploadRes.ok) throw new Error("Failed to upload video to Sarvam");
+      if (!generateRes.ok) {
+        const text = await generateRes.text();
+        let msg = text;
+        try { msg = JSON.parse(text).error || text; } catch { /* noop */ }
+        throw new Error(msg || "Generation failed");
+      }
+
+      const data = await generateRes.json();
+      const { project_id, job_id, upload_url, lip_sync } = data;
+
+      // For file uploads the server returns upload_url;
+      // for URL uploads the server already uploaded — no upload_url.
+      if (upload_url && file) {
+        const uploadRes = await fetch(upload_url, {
+          method: "PUT",
+          headers: {
+            "Content-Type": file.type || "video/mp4",
+            "x-ms-blob-type": "BlockBlob",
+          },
+          body: file,
+        });
+        if (!uploadRes.ok) {
+          throw new Error(
+            `Failed to upload file to Sarvam storage (${uploadRes.status}). ` +
+            "Try using a public URL instead."
+          );
+        }
+      }
 
       // Start the Sarvam job
       const startRes = await fetch("/api/translate/start", {
@@ -373,17 +361,22 @@ export function TranslationModal({
           project_id,
           job_id,
           lip_sync,
-          video_url: activeTab === "url" ? url.trim() : `file:${file?.name}`,
+          video_url: activeTab === "url" ? url.trim() : `file:${file?.name ?? "upload"}`,
         }),
       });
 
-      if (!startRes.ok) throw new Error("Failed to start processing");
+      if (!startRes.ok) {
+        const text = await startRes.text();
+        let msg = text;
+        try { msg = JSON.parse(text).error || text; } catch { /* noop */ }
+        throw new Error(msg || "Failed to start processing");
+      }
 
       const project = buildProject("processing");
       if (activeTab === "url") project.videoUrl = url.trim();
       onProjectCreated(project);
       handleOpenChange(false);
-      addToast("Video queued for translation", "success");
+      addToast("Video queued for translation!", "success");
     } catch (error: any) {
       addToast(error.message || "An error occurred", "error");
     } finally {
@@ -418,10 +411,12 @@ export function TranslationModal({
       }
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Transcription failed");
+        const text = await response.text();
+        let msg = text;
+        try { msg = JSON.parse(text).error || text; } catch { /* noop */ }
+        throw new Error(msg || "Transcription failed");
       }
-      const data = await response.json();
+      await response.json(); // transcript data (used in editor)
 
       const project = buildProject("draft");
       if (activeTab === "url") project.videoUrl = url.trim();
