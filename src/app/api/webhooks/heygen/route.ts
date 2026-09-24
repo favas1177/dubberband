@@ -29,11 +29,25 @@ export async function POST(request: Request) {
     const body = JSON.parse(rawBody);
     console.log("[HeyGen Webhook] Received payload:", body);
 
-    // According to HeyGen's webhook docs, the job_id is usually provided in the payload
-    // You may need to adjust this depending on the exact webhook payload structure of HeyGen's LipSync v3 API
-    const jobId = body.job_id || body.data?.job_id;
-    const status = body.status || body.data?.status; // e.g., 'completed', 'failed'
-    const videoUrl = body.video_url || body.data?.video_url || body.data?.url;
+    // Parse HeyGen V2/V3 Webhook Payload
+    const jobId = 
+      body.job_id || 
+      body.data?.job_id || 
+      body.event_data?.video_id || 
+      body.event_data?.video_translation_id || 
+      body.event_data?.id;
+
+    let status = body.status || body.data?.status;
+    if (!status && body.event_type) {
+      status = body.event_type.includes("success") ? "completed" : 
+               body.event_type.includes("fail") ? "failed" : "processing";
+    }
+
+    const videoUrl = 
+      body.video_url || 
+      body.data?.video_url || 
+      body.data?.url || 
+      body.event_data?.url;
 
     if (!jobId) {
       return NextResponse.json({ error: "Missing job_id in payload" }, { status: 400 });
